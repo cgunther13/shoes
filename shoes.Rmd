@@ -1,0 +1,373 @@
+---
+title: "NBA Shoes"
+author: "Chris Gunther"
+date: "2025-09-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse) # Data manipulation and visualization
+library(dplyr) 
+library(ggplot2) # Plotting
+library(ggimage) 
+library(ggview)
+library(ggpattern) # Draw stripes on bars
+library(hoopR) # NBA headshots
+library(wehoop) # WNBA headshots
+```
+
+# Read in and merge data
+```{r}
+shoes <- read.csv("shoes.csv")
+player_stats <- read.csv("stats_bios_25.csv")
+df <- merge(player_stats, shoes, by.x = "player", by.y = "stat_name")
+```
+
+# Clean the data
+
+## Remove players with no shoe listed
+```{r}
+df <- df %>% filter(!(shoe == ""))
+```
+
+## Categorize shoes by brand & athlete
+```{r}
+# Define your lists
+brands <- c("Nike", "Jordan", "Adidas", "Anta", "Puma", "SKECHERS", "741", "Converse", "Li-Ning", "361", "New Balance", "Under Armour", "Asics", "Crossover Culture", "Holo", "Judah", "Peak", "QIAODAN", "Reebok", "Rigorer", "Serious Player", "Tarmak", "XTEP", "Xero")
+
+athletes <- c("Kobe", "Sabrina", "KD", "Dame", "Harden", "KAI", "Book", "Tatum", "Wade", "Freak", "Ja", "JA", "Kyrie", "LeBron", "Lebron", "Joker", "AE", "AE1", "Adidas D", "Luka", "KT", "Fox", "Curry", "ZAP", "IO", "CP3", "Zion", "CJ", "JB", "JB3", "Wade", "Kawhi", "Giannis", "PG", "AW", "AW1", "MB", "Scoot", "Stewie", "AR", "BP")
+
+get_brand <- function(name) {
+  b <- brands[sapply(brands, function(bx) grepl(paste0("\\b", bx, "\\b"), name, ignore.case=FALSE))]
+  if (length(b) == 0) NA else b[1]
+}
+
+get_athlete <- function(name) {
+  a <- athletes[sapply(athletes, function(ax) grepl(paste0("\\b", ax, "\\b"), name, ignore.case=FALSE))]
+  if (length(a) == 0) NA else a[1]
+}
+
+df <- df %>%
+  mutate(
+    brand = sapply(shoe, get_brand),
+    athlete = sapply(shoe, get_athlete)
+  )
+```
+
+## Map shoe athlete to athlete name
+```{r}
+athlete_map <- c(
+  "Kobe" = "Kobe Bryant",
+  "Sabrina" = "Sabrina Ionescu",
+  "KD" = "Kevin Durant",
+  "Dame" = "Damian Lillard",
+  "Harden" = "James Harden",
+  "KAI" = "Kyrie Irving",
+  "Book" = "Devin Booker",
+  "Tatum" = "Jayson Tatum",
+  "Wade" = "Dwyane Wade",
+  "Freak" = "Giannis Antetokounmpo",
+  "Ja" = "Ja Morant",
+  "JA" = "Ja Morant",
+  "Kyrie" = "Kyrie Irving",
+  "LeBron" = "LeBron James",
+  "Lebron" = "LeBron James",
+  "Joker" = "Nikola Jokić",
+  "AE" = "Anthony Edwards",
+  "AE1" = "Anthony Edwards",
+  "Adidas D" = "Donovan Mitchell",
+  "Luka" = "Luka Dončić",
+  "KT" = "Klay Thompson",
+  "Curry" = "Stephen Curry",
+  "Fox" = "De'Aaron Fox",
+  "ZAP" = "Donte DiVincenzo",
+  "IO" = "Isaac Okoro",
+  "CP3" = "Chris Paul",
+  "Zion" = "Zion Williamson",
+  "CJ" = "CJ McCollum",
+  "JB" = "Jimmy Butler III",
+  "JB3" = "Jimmy Butler III",
+  "Kawhi" = "Kawhi Leonard",
+  "Giannis" = "Giannis Antetokounmpo",
+  "PG" = "Paul George",
+  "AW" = "Andrew Wiggins",
+  "AW1" = "Andrew Wiggins", 
+  "MB" = "LaMelo Ball",
+  "Scoot" = "Scoot Henderson",
+  "Stewie" = "Breanna Stewart",
+  "AR" = "Austin Reaves",
+  "BP" = "Brandin Podziemski"
+)
+
+df <- df %>% mutate(athlete_name = recode(athlete, !!!athlete_map))
+```
+
+### Get athlete headshot
+```{r}
+# Get NBA player IDs and full names
+nba_ids <- nba_commonallplayers(league_id = '00', season = year_to_season(most_recent_nba_season() - 1))
+nba_ids <- nba_ids$CommonAllPlayers
+nba_ids <- nba_ids %>% select(PERSON_ID, DISPLAY_FIRST_LAST)
+
+# Get WNBA player IDs and full names
+wnba_ids <- wnba_commonallplayers(league_id = '10', season = year_to_season(most_recent_nba_season() - 1))
+wnba_ids <- wnba_ids$CommonAllPlayers
+wnba_ids <- wnba_ids %>% select(PERSON_ID, DISPLAY_FIRST_LAST)
+
+player_ids <- rbind(nba_ids, wnba_ids)
+
+# Merge into df
+df <- df %>% left_join(player_ids, by = c("athlete_name" = "DISPLAY_FIRST_LAST"))
+
+# List WNBA athletes that require wnba_playerheadshot
+wnba_athletes <- c("Sabrina Ionescu", "Breanna Stewart")
+
+# Get headshots
+df <- df %>%
+  rowwise() %>%
+  mutate(
+    headshot_url = case_when(
+      athlete_name %in% wnba_athletes & !is.na(PERSON_ID) ~ wnba_playerheadshot(PERSON_ID),
+      !is.na(PERSON_ID) ~ nba_playerheadshot(PERSON_ID),
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  ungroup()
+```
+
+## Tag frontcourt vs backcourt
+```{r}
+df <- df %>%
+  mutate(
+    pos2 = ifelse(pos %in% c("F-G", "F-C", "F", "C-F", "C"), "frontcourt", "backcourt")
+  )
+```
+
+## Break out Kobe models
+```{r}
+df <- df %>% mutate(
+    kobe_model = ifelse(grepl("\\bKobe\\b", shoe),
+                        word(shoe, 3),
+                        NA)
+  )
+```
+
+## Caluclate player ages
+```{r}
+current_year <- year(Sys.Date())
+
+df <- df %>%
+  mutate(
+    # Convert birthday to Date and calculate age
+    birthday_date = mdy(birthday),
+    age = current_year - year(birthday_date),
+    # Create age buckets
+    age_bucket = case_when(
+      age < 20 ~ "under 20",
+      age >= 20 & age <= 24 ~ "20-24",
+      age >= 25 & age <= 29 ~ "25-29",
+      age >= 30 ~ "30 or older",
+      TRUE ~ NA_character_
+    )
+  )
+```
+
+
+# Count of players
+
+## By shoe
+```{r}
+count_by_shoe <- df %>% 
+  group_by(shoe) %>% 
+  summarise(players = n(),
+            player_perc = players/nrow(df)) %>% 
+  arrange(desc(players))
+write.csv(count_by_shoe, "count_by_shoe.csv")
+```
+
+## By brand
+```{r}
+count_by_brand <- df %>% 
+  group_by(brand) %>% 
+  summarise(players = n(),
+            player_perc = players/nrow(df) * 100) %>% 
+  arrange(desc(players))
+write.csv(count_by_brand, "count_by_brand.csv")
+```
+
+## By athlete
+```{r}
+count_by_athlete <- df %>% 
+  filter(!is.na(athlete_name)) %>% 
+  group_by(athlete_name, headshot_url) %>% 
+  summarise(players = n()) %>% 
+  arrange(desc(players))
+write.csv(count_by_athlete, "count_by_athlete.csv")
+```
+
+## By Kobe model breakdown
+```{r}
+count_by_kobe_model <- df %>% 
+  group_by(kobe_model) %>% 
+  summarise(players = n()) %>% 
+  arrange(desc(players))
+write.csv(count_by_kobe_model, "count_by_kobe_model.csv")
+```
+
+# Stats
+
+## By brand
+```{r}
+stats_by_brand <- df %>% 
+  group_by(brand) %>% 
+  summarise(players = n(),
+            ppg = mean(pts),
+            rpg = mean(reb),
+            apg = mean(ast)) %>% 
+  arrange(desc(ppg))
+write.csv(stats_by_brand, "stats_by_brand.csv")
+```
+
+## By athlete
+```{r}
+stats_by_athlete <- df %>% 
+  group_by(athlete_name) %>% 
+  summarise(players = n(),
+            ppg = mean(pts),
+            rpg = mean(reb),
+            apg = mean(ast)) %>% 
+  arrange(desc(ppg))
+write.csv(stats_by_athlete, "stats_by_athlete.csv")
+```
+
+# Bio
+
+## Most popular by position
+```{r}
+top_shoes_by_position <- df %>%
+  filter(!is.na(athlete)) %>%
+  group_by(pos2, athlete) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  arrange(pos2, desc(count)) %>%
+  group_by(pos2) %>%
+  slice_max(order_by = count, n = 5)
+write.csv(top_shoes_by_position, "top_shoes_by_position.csv")
+```
+
+## Most popular by nationality
+```{r}
+top_shoes_by_nationality <- df %>%
+  filter(!is.na(athlete)) %>%
+  group_by(nationality, athlete) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  arrange(nationality, desc(count)) %>%
+  group_by(nationality) %>%
+  slice_max(order_by = count, n = 3)
+write.csv(top_shoes_by_nationality, "top_shoes_by_nationality.csv")
+```
+
+## Most popular by home state/country
+```{r}
+top_shoe_by_home <- df %>%
+  filter(!is.na(athlete_name)) %>%
+  group_by(birth_state_country, athlete_name) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  arrange(birth_state_country, desc(count)) %>%
+  group_by(birth_state_country) %>%
+  slice_max(order_by = count, n = 1, with_ties = TRUE) %>%
+  left_join(
+    df %>%
+      filter(athlete_name == "Kobe Bryant") %>%
+      group_by(birth_state_country, kobe_model) %>%
+      summarise(kobe_model_count = n(), .groups = "drop") %>%
+      arrange(birth_state_country, desc(kobe_model_count)) %>%
+      group_by(birth_state_country) %>%
+      slice_max(order_by = kobe_model_count, n = 1, with_ties = TRUE),
+    by = "birth_state_country"
+  ) %>%
+  mutate(
+    top_kobe_model = ifelse(athlete_name == "Kobe Bryant", kobe_model, NA_character_),
+    top_shoe = ifelse(athlete_name == "Kobe Bryant", paste(athlete_name, top_kobe_model), athlete_name)
+  ) %>%
+  select(birth_state_country, athlete_name, count, top_kobe_model, top_shoe)
+write.csv(top_shoe_by_home, "top_shoe_by_home.csv")
+```
+
+## Most popular by team
+```{r}
+top_shoe_by_team <- df %>%
+  filter(!is.na(athlete)) %>%
+  group_by(team, athlete) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  arrange(team, desc(count)) %>%
+  group_by(team) %>%
+  slice_max(order_by = count, n = 1, with_ties = FALSE) %>%
+  left_join(
+    df %>%
+      filter(athlete == "Kobe") %>%
+      group_by(team, kobe_model) %>%
+      summarise(kobe_model_count = n(), .groups = "drop") %>%
+      arrange(team, desc(kobe_model_count)) %>%
+      group_by(team) %>%
+      slice_max(order_by = kobe_model_count, n = 1, with_ties = FALSE),
+    by = "team"
+  ) %>%
+  mutate(
+    top_kobe_model = ifelse(athlete == "Kobe", kobe_model, NA_character_),
+    top_shoe = ifelse(athlete == "Kobe", paste(athlete, top_kobe_model), athlete)
+  ) %>%
+  select(team, athlete, count, top_kobe_model, top_shoe)
+write.csv(top_shoe_by_team, "top_shoe_by_team.csv")
+```
+
+### Most popular by team excluding Kobe
+```{r}
+top_shoe_by_team_no_kobe <- df %>%
+  filter(!is.na(athlete), athlete_name != "Kobe Bryant", athlete_name != "Dwyane Wade") %>%
+  group_by(team, athlete_name) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  arrange(team, desc(count)) %>%
+  group_by(team) %>%
+  slice_max(order_by = count, n = 1, with_ties = TRUE)
+write.csv(top_shoe_by_team_no_kobe, "top_shoe_by_team_no_kobe.csv")
+```
+
+## Most popular by age
+```{r}
+top_shoes_by_age <- df %>%
+  filter(!is.na(age_bucket), !is.na(athlete_name)) %>%
+  group_by(age_bucket, athlete_name) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  arrange(age_bucket, desc(count)) %>%
+  group_by(age_bucket) %>%
+  slice_max(order_by = count, n = 5)
+write.csv(top_shoes_by_age, "top_shoes_by_age.csv")
+```
+
+## Average age 
+
+### By brand
+```{r}
+## By brand
+age_by_brand <- df %>% 
+  group_by(brand) %>% 
+  summarise(players = n(),
+            median_age = median(age)) %>% 
+  filter(players >= 5) %>% 
+  arrange(desc(median_age))
+write.csv(age_by_brand, "age_by_brand.csv")
+```
+
+## By athlete
+```{r}
+age_by_athlete <- df %>% 
+  group_by(athlete_name) %>% 
+  summarise(players = n(),
+            median_age = median(age)) %>% 
+  filter(players >= 5) %>% 
+  arrange(desc(median_age))
+write.csv(age_by_athlete, "age_by_athlete.csv")
+```
+
